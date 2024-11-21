@@ -168,7 +168,7 @@ class Gpios(CleepModule):
     """
 
     MODULE_AUTHOR = "Cleep"
-    MODULE_VERSION = "1.2.0"
+    MODULE_VERSION = "1.2.1"
     MODULE_DEPS = []
     MODULE_DESCRIPTION = "Configure your raspberry pins"
     MODULE_LONGDESCRIPTION = "Gives you access to raspberry pins to configure your inputs/ouputs as you wish quickly and easily."
@@ -1103,9 +1103,9 @@ class Gpios(CleepModule):
                 % (device["gpio"], device["mode"])
             )
 
-        # turn on relay
+        # turn on output
         self.logger.debug("Turn on GPIO %s" % device["gpio"])
-        self._gpio_output(device["pin"], GPIO_LOW)
+        self._gpio_output(device["pin"], GPIO_HIGH)
 
         # save current state
         device["on"] = True
@@ -1141,9 +1141,9 @@ class Gpios(CleepModule):
                 % (device["gpio"], device["mode"])
             )
 
-        # turn off relay
+        # turn off output
         self.logger.debug("Turn off GPIO %s" % device["gpio"])
-        self._gpio_output(device["pin"], GPIO_HIGH)
+        self._gpio_output(device["pin"], GPIO_LOW)
 
         # save current state
         device["on"] = False

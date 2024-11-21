@@ -140,9 +140,10 @@ angular
 
                     for( pinNumber in pins.data ) {
                         if( pinNumber % 2 ) {
-                            ctrl.__fillGpios(evens, pinNumber, pins.data[pinNumber]);
-                        } else {
                             ctrl.__fillGpios(odds, pinNumber, pins.data[pinNumber]);
+
+                        } else {
+                            ctrl.__fillGpios(evens, pinNumber, pins.data[pinNumber]);
                         }
                     }
                     evens.reverse();
