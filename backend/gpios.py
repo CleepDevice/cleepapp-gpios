@@ -14,6 +14,7 @@ from RPi.GPIO import (
     OUT as GPIO_OUT,
     IN as GPIO_IN,
     PUD_DOWN as GPIO_PUD_DOWN,
+    PUD_UP as GPIO_PUD_UP,
     RPI_INFO as GPIO_RPI_INFO,
 )
 
@@ -48,27 +49,32 @@ class GpioInputWatcher(Thread):
 
     DEBOUNCE = 0.20
 
-    def __init__(self, pin, uuid, on_callback, off_callback, level=GPIO_LOW):
+    def __init__(self, pin, device_uuid, on_callback, off_callback, level=GPIO_LOW):
         """
         Constructor
 
         Args:
             pin (int): gpio pin number
-            uuid (str): device uuid
+            device_uuid (str): device uuid
             on_callback (function): on callback
             off_callback (function): off callback
-            level (RPi.GPIO.LOW|RPi.GPIO.HIGH): triggered level
+            level (GPIO.LOW|GPIO.HIGH): triggered level
         """
         # init
         Thread.__init__(self)
         Thread.daemon = True
         self.logger = logging.getLogger("Gpios")
         # self.logger.setLevel(logging.DEBUG)
-        self.uuid = uuid
+        self.device_uuid = device_uuid
 
         # members
         self.continu = True
         self.pin = pin
+        self.logger.debug(
+            "Register new input callback for %s which trigger on '%s'",
+            device_uuid,
+            level,
+        )
         self.level = level
         self.debounce = GpioInputWatcher.DEBOUNCE
         self.on_callback = on_callback
@@ -96,35 +102,35 @@ class GpioInputWatcher(Thread):
         last_level = None
         time_on = 0
 
-        # send current level
         try:
             while self.continu:
-                # get level
-                level = self._get_input_level()
+                current_level = self._get_input_level()
 
                 if last_level is None:
                     # first iteration, send initial value
-                    if self.level == GPIO_LOW:
-                        self.off_callback(self.uuid, 0)
+                    if current_level == self.level:
+                        self.on_callback(self.device_uuid)
                     else:
-                        self.on_callback(self.uuid)
+                        self.off_callback(self.device_uuid, 0)
 
-                elif level != last_level and level == self.level:
+                elif current_level == last_level:
+                    # no level changes drop it
+                    pass
+
+                elif current_level == self.level:
                     self.logger.trace("Input %s on" % str(self.pin))
                     time_on = uptime.uptime()
-                    self.on_callback(self.uuid)
+                    self.on_callback(self.device_uuid)
                     time.sleep(self.debounce)
 
-                elif level != last_level:
+                elif current_level != last_level:
                     self.logger.trace("Input %s off" % str(self.pin))
-                    self.off_callback(self.uuid, uptime.uptime() - time_on)
+                    self.off_callback(self.device_uuid, uptime.uptime() - time_on)
                     time.sleep(self.debounce)
 
-                else:
-                    time.sleep(0.125)
+                last_level = current_level
+                time.sleep(0.125)
 
-                # update last level
-                last_level = level
         except Exception:  # pragma: no cover
             self.logger.exception("Exception in GpioInputWatcher:")
 
@@ -165,10 +171,13 @@ class GpioInputWatcher(Thread):
 class Gpios(CleepModule):
     """
     Raspberry pi gpios class
+
+    This application is a wapper to RpiGPIO library
+    https://sourceforge.net/p/raspberry-gpio-python/wiki/browse_pages/
     """
 
     MODULE_AUTHOR = "Cleep"
-    MODULE_VERSION = "1.2.1"
+    MODULE_VERSION = "1.3.0"
     MODULE_DEPS = []
     MODULE_DESCRIPTION = "Configure your raspberry pins"
     MODULE_LONGDESCRIPTION = "Gives you access to raspberry pins to configure your inputs/ouputs as you wish quickly and easily."
@@ -349,6 +358,7 @@ class Gpios(CleepModule):
 
         # members
         self._input_watchers = {}
+        self.gpios_on_states = {}
 
         # events
         self.gpios_gpio_off = self._get_event("gpios.gpio.off")
@@ -361,6 +371,17 @@ class Gpios(CleepModule):
         # configure raspberry pi
         GPIO_setmode(GPIO_BOARD)
         GPIO_setwarnings(False)
+
+    def get_module_devices(self):
+        config_devices = super().get_module_devices()
+
+        # update volatile gpios "on" state (gpios with keep to False will
+        # not have current state propagated otherwise)
+        for device_uuid, config_device in config_devices.items():
+            device_on = config_device.get("on", False)
+            config_device["on"] = self.gpios_on_states.get(device_uuid, device_on)
+
+        return config_devices
 
     def _on_start(self):
         """
@@ -382,24 +403,21 @@ class Gpios(CleepModule):
         # cleanup gpios
         GPIO_cleanup()
 
-    def _gpio_setup(
-        self, pin, mode, initial=None, pull_up_down=None
-    ):  # pragma: no cover
+    def _gpio_setup(self, pin, mode, pull_mode=None):
         """
         Gpio setup
 
         Args:
-            pin (number): pin number
-            mode (?): pin mode
-            initial (?): ?
-            pull_up_mode (?): ?
+            pin (number): Pin number
+            mode (number): Pin mode (GPIO_IN|GPIO_OUT)
+            pull_mode (number): Pin pull mode, for input only (GPIO_PUD_UP|GPIO_PUD_DOWN)
         """
-        if initial is None and pull_up_down is None:
+        if mode == GPIO_IN and pull_mode:
+            GPIO_setup(pin, mode, pull_up_down=pull_mode)
+        elif mode == GPIO_IN and not pull_mode:
             GPIO_setup(pin, mode)
-        elif initial is None:
-            GPIO_setup(pin, mode, pull_up_down=pull_up_down)
-        elif pull_up_down is None:
-            GPIO_setup(pin, mode, initial=initial)
+        elif mode == GPIO_OUT:
+            GPIO_setup(pin, mode)
 
     def _gpio_output(self, pin, level):
         """
@@ -422,22 +440,14 @@ class Gpios(CleepModule):
             'Launch input watcher for device "%s" (inverted=%s)'
             % (device["uuid"], device["inverted"])
         )
-        if not device["inverted"]:
-            watcher = GpioInputWatcher(
-                device["pin"],
-                device["uuid"],
-                self.__input_on_callback,
-                self.__input_off_callback,
-                GPIO_LOW,
-            )
-        else:
-            watcher = GpioInputWatcher(
-                device["pin"],
-                device["uuid"],
-                self.__input_on_callback,
-                self.__input_off_callback,
-                GPIO_HIGH,
-            )
+        level = GPIO_HIGH if device.get("inverted", False) else GPIO_LOW
+        watcher = GpioInputWatcher(
+            device["pin"],
+            device["uuid"],
+            self.__input_on_callback,
+            self.__input_off_callback,
+            level,
+        )
         self._input_watchers[device["uuid"]] = watcher
         watcher.start()
 
@@ -462,58 +472,50 @@ class Gpios(CleepModule):
             # get gpio pin
             if device["mode"] == self.MODE_OUTPUT:
                 self.logger.debug(
-                    "Configure gpio %s pin %d as OUTPUT"
-                    % (device["gpio"], device["pin"])
+                    "Configure gpio %s pin %d as OUTPUT with on=%s",
+                    device["gpio"],
+                    device["pin"],
+                    device["on"],
                 )
-                # configure it
+
                 if device["on"]:
-                    initial = GPIO_LOW
-                    self.logger.debug(
-                        "Event=%s initial=%s" % ("gpios.gpio.on", str(initial))
-                    )
-                    self._gpio_setup(device["pin"], GPIO_OUT, initial=initial)
+                    self._gpio_setup(device["pin"], GPIO_OUT)
+                    self.turn_on(device["uuid"])
 
                     # and broadcast gpio status at startup
                     self.logger.debug(
-                        "Broadcast event %s for gpio %s"
-                        % ("gpios.gpio.on", device["gpio"])
+                        "Broadcast event %s for gpio %s",
+                        "gpios.gpio.on",
+                        device["gpio"],
                     )
                     self.gpios_gpio_on.send(
-                        params={"gpio": device["gpio"], "init": True},
+                        params={"gpio": device["gpio"], "init": True, "on": True},
                         device_id=device["uuid"],
                     )
 
                 else:
-                    initial = GPIO_HIGH
-                    self.logger.debug(
-                        "Event=%s initial=%s" % ("gpios.gpio.off", str(initial))
-                    )
-                    self._gpio_setup(device["pin"], GPIO_OUT, initial=initial)
+                    self._gpio_setup(device["pin"], GPIO_OUT)
+                    self.turn_off(device["uuid"])
 
                     # and broadcast gpio status at startup
                     self.logger.debug(
-                        "Broadcast event %s for gpio %s"
-                        % ("gpios.gpio.off", device["gpio"])
+                        "Broadcast event %s for gpio %s",
+                        "gpios.gpio.off",
+                        device["gpio"],
                     )
                     self.gpios_gpio_off.send(
-                        params={"gpio": device["gpio"], "init": True, "duration": 0},
+                        params={
+                            "gpio": device["gpio"],
+                            "init": True,
+                            "duration": 0,
+                            "on": False,
+                        },
                         device_id=device["uuid"],
                     )
 
             elif device["mode"] == self.MODE_INPUT:
-                if not device["inverted"]:
-                    self.logger.debug(
-                        "Configure gpio %s (pin %s) as INPUT"
-                        % (device["gpio"], device["pin"])
-                    )
-                else:
-                    self.logger.debug(
-                        "Configure gpio %s (pin %s) as INPUT inverted"
-                        % (device["gpio"], device["pin"])
-                    )
-
-                # configure it
-                self._gpio_setup(device["pin"], GPIO_IN, pull_up_down=GPIO_PUD_DOWN)
+                # always PUD_UP: https://sourceforge.net/p/raspberry-gpio-python/wiki/Inputs/
+                self._gpio_setup(device["pin"], GPIO_IN, pull_mode=GPIO_PUD_UP)
 
                 # and launch input watcher
                 self.__launch_input_watcher(device)
@@ -535,10 +537,12 @@ class Gpios(CleepModule):
             True if gpio reconfigured successfully, False otherwise
         """
         # stop watcher
-        if self._deconfigure_gpio(device):
-            # launch new watcher
-            self.__launch_input_watcher(device)
+        deconfigured = self._deconfigure_gpio(device)
+        if not deconfigured:
+            return False
 
+        # launch new watcher
+        self.__launch_input_watcher(device)
         return True
 
     def _deconfigure_gpio(self, device):
@@ -578,9 +582,17 @@ class Gpios(CleepModule):
         if device is None:
             raise Exception('Device "%s" not found' % device_uuid)
 
+        # save current state
+        device["on"] = True
+        if device.get("keep", False):
+            self._update_device(device_uuid, device)
+        else:
+            self.gpios_on_states[device_uuid] = device["on"]
+
         # broadcast event
         self.gpios_gpio_on.send(
-            params={"gpio": device["gpio"], "init": False}, device_id=device_uuid
+            params={"gpio": device["gpio"], "init": False, "on": True},
+            device_id=device_uuid,
         )
 
     def __input_off_callback(self, device_uuid, duration):
@@ -596,9 +608,21 @@ class Gpios(CleepModule):
         if device is None:
             raise Exception('Device "%s" not found' % device_uuid)
 
+        # save current state
+        device["on"] = False
+        if device["keep"]:
+            self._update_device(device_uuid, device)
+        else:
+            self.gpios_on_states[device_uuid] = device["on"]
+
         # broadcast event
         self.gpios_gpio_off.send(
-            params={"gpio": device["gpio"], "init": False, "duration": duration},
+            params={
+                "gpio": device["gpio"],
+                "init": False,
+                "duration": duration,
+                "on": False,
+            },
             device_id=device_uuid,
         )
 
@@ -884,7 +908,7 @@ class Gpios(CleepModule):
             gpio (str): selected gpio ("GPIOX")
             mode (str): mode ("input"|"output")
             keep (bool): keep state when restarting
-            inverted (bool): if true a callback will be triggered on gpio low level instead of high level
+            inverted (bool): if true a callback will be triggered on gpio high level instead of low level
             command_sender (str): command request sender (optional)
 
         Returns:
@@ -936,7 +960,8 @@ class Gpios(CleepModule):
                         {
                             "validator": lambda val: self._search_device("gpio", gpio)
                             is None,
-                            "message": 'Gpio "%s" is already used by other application' % gpio,
+                            "message": 'Gpio "%s" is already used by other application'
+                            % gpio,
                         },
                     ],
                 },
@@ -958,7 +983,7 @@ class Gpios(CleepModule):
             "pin": self.get_raspi_gpios()[gpio],
             "gpio": gpio,
             "keep": keep,
-            "on": inverted,
+            "on": False,
             "inverted": inverted,
             "owner": command_sender,
             "type": "gpio",
@@ -1082,7 +1107,7 @@ class Gpios(CleepModule):
 
     def turn_on(self, device_uuid):
         """
-        Turn on specified device
+        Turn on specified output gpio
 
         Args:
             device_uuid (str): device identifier
@@ -1105,12 +1130,15 @@ class Gpios(CleepModule):
 
         # turn on output
         self.logger.debug("Turn on GPIO %s" % device["gpio"])
-        self._gpio_output(device["pin"], GPIO_HIGH)
+        level = GPIO_LOW if device.get("inverted", False) else GPIO_HIGH
+        self._gpio_output(device["pin"], level)
 
         # save current state
         device["on"] = True
         if device["keep"]:
             self._update_device(device_uuid, device)
+        else:
+            self.gpios_on_states[device_uuid] = device["on"]
 
         # broadcast event
         self.gpios_gpio_on.send(
@@ -1121,7 +1149,7 @@ class Gpios(CleepModule):
 
     def turn_off(self, device_uuid):
         """
-        Turn off specified device
+        Turn off specified output gpio
 
         Args:
             device_uuid (str): device identifier
@@ -1143,12 +1171,15 @@ class Gpios(CleepModule):
 
         # turn off output
         self.logger.debug("Turn off GPIO %s" % device["gpio"])
-        self._gpio_output(device["pin"], GPIO_LOW)
+        level = GPIO_HIGH if device.get("inverted", False) else GPIO_LOW
+        self._gpio_output(device["pin"], level)
 
         # save current state
         device["on"] = False
         if device["keep"]:
             self._update_device(device_uuid, device)
+        else:
+            self.gpios_on_states[device_uuid] = device["on"]
 
         # broadcast event
         self.gpios_gpio_off.send(

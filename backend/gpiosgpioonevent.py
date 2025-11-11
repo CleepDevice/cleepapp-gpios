@@ -3,13 +3,14 @@
 
 from cleep.libs.internals.event import Event
 
+
 class GpiosGpioOnEvent(Event):
     """
     Gpios.gpio.on event
     """
 
-    EVENT_NAME = 'gpios.gpio.on'
-    EVENT_PARAMS = ['gpio', 'init']
+    EVENT_NAME = "gpios.gpio.on"
+    EVENT_PARAMS = ["gpio", "init", "on"]
 
     def __init__(self, params):
         """
@@ -19,4 +20,3 @@ class GpiosGpioOnEvent(Event):
             params (dict): event parameters
         """
         Event.__init__(self, params)
-

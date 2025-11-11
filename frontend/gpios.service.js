@@ -86,6 +86,5 @@ function($q, $rootScope, rpcService, cleepService) {
     self.turnOff = function(uuid) {
         return rpcService.sendCommand('turn_off', 'gpios', {'device_uuid':uuid});
     };
-
 }]);
 

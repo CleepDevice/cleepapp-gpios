@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0] - 2025-11-11
+
+### Fixed
+- Input does not work as expected
+- There were issues restoring gpio state
+- Fix issue with inverted state
+
+### Changed
+- Code improvements
+- Send "on" state on on/off events to facilitate device state sync
+- Properly handle volatile gpio state (not store in config file)
+
 ## [1.2.1] - 2024-11-21
 
 ### Fixed
