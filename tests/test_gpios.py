@@ -5,7 +5,6 @@ import time
 import sys, os, copy
 import shutil
 
-sys.path.append("../")
 from backend.gpios import Gpios, GpioInputWatcher
 from backend.gpiosgpioonevent import GpiosGpioOnEvent
 from backend.gpiosgpiooffevent import GpiosGpioOffEvent
